@@ -2,7 +2,7 @@
 # compares the coordinates
 
 # imports
-import sys
+import sys, time
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -31,6 +31,7 @@ def sepHist(masterLensCoords, fujiCoords):
     fig.savefig('separation-hist.png', bbox_inches='tight', transparent=False)
 
 def main():
+    start = time.time()
     
     # get master lens coordinates as sky coords to compare with desi observations
     masterlens = pd.read_csv('masterlens.tsv', sep='\t', skiprows=1)
@@ -56,8 +57,23 @@ def main():
     sepHist(lensCoords, fujiCoords)
     
     # perform the crossmatch
-    
-    
+    searchSep = 1*u.arcsec # based on the histogram, 1 arcsecond seems reasonable
+    fujiIdx, masterlensIdx, sep, _ = lensCoords.search_around_sky(fujiCoords, searchSep)
+
+    # write out file I need for fastspecfit
+    fastspecInput = fuji[['TARGETID', 'SURVEY', 'PROGRAM', 'HEALPIX']][fujiIdx]
+    fastspecInput.write('fastspec-input.fits', overwrite=True)
+
+    # write out fuji matches
+    fuji[fujiIdx].write('fuji-matches.fits', overwrite=True)
+
+    # fix and write out masterlens matches
+    masterlens.columns = masterlens.columns.str.strip('#').str.strip() # get rid of spaces
+    masterlens.columns = [colname[1:-1] for colname in masterlens.columns] # get rid of extra quotes
+    masterlens.columns = masterlens.columns.str.upper() # make upper case column names
+    Table.from_pandas(masterlens.iloc[masterlensIdx]).write('masterlens-matches.fits', overwrite=True)
+
+    print(f'{len(fujiIdx)} matches found in {time.time()-start:.2f} seconds')
     
 if __name__ == '__main__':
     sys.exit(main())

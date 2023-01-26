@@ -5,6 +5,7 @@
 import sys
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 from astropy.coordinates import SkyCoord, concatenate
 import astropy.units as u
@@ -13,17 +14,21 @@ from astropy.io import ascii
 import fitsio
 
 # useful functions
-def checkSep(desiCoords, lensCoord, desiTable, epsilon=1e-4):
+def sepHist(masterLensCoords, fujiCoords):
+    '''
+    masterLensCoords [SkyCoord Obj] : All of the master lens coordinates
+    fujiCoords [SkyCoord Obj] : All of the coordinats in the Fuji Best catalog
+    '''
+    # calculate all of the nearest neighbors
+    _, sep2d, _ = masterLensCoords.match_to_catalog_sky(fujiCoords)
 
-    sep = np.array(lensCoord.separation(desiCoords))
-    whereClose = np.where(sep < epsilon)[0]
-    
-    goodTarg = None
-    
-    if len(whereClose) != 0:
-        goodTarg = desiTable[whereClose]
-        
-    return goodTarg
+    # plot them up to look for a good maximum search radius
+    fig, ax = plt.subplots()
+    _ = ax.hist(sep2d.arcsec, bins=100)
+    ax.set_ylabel('N')
+    ax.set_xlabel('Target Separation (arcsec)')
+
+    fig.savefig('separation-hist.png', bbox_inches='tight', transparent=False)
 
 def main():
     
@@ -39,54 +44,20 @@ def main():
 
     lensCoords = SkyCoord(raDeg*u.deg, decDeg*u.deg)
     
-    # get master list of all fuji and gaudalupe targets
     # read in fuji catalog
     fujiPath = '/global/cfs/cdirs/desi/spectro/redux/fuji/zcatalog/zall-pix-fuji.fits'
-    fuji = Table(fitsio.read(fujiPath))
-
-    # read in guadalupe catalog
-    guadalupePath = '/global/cfs/cdirs/desi/spectro/redux/guadalupe/zcatalog/zall-pix-guadalupe.fits'
-    guadalupe = Table(fitsio.read(guadalupePath))
+    fuji = Table(fitsio.FITS(fujiPath)[1].read())
+    fuji = fuji[fuji['ZCAT_PRIMARY']] # only select the best among duplicates
     
-    # convert the fuji and guadalupe ra and dec to SkyCoords
+    # convert the fuji ra and dec to SkyCoords
     fujiCoords = SkyCoord(fuji['TARGET_RA']*u.deg, fuji['TARGET_DEC']*u.deg)
-    guadalupeCoords = SkyCoord(guadalupe['TARGET_RA']*u.deg, guadalupe['TARGET_DEC']*u.deg)
+
+    # plot up histogram of separations
+    sepHist(lensCoords, fujiCoords)
     
     # perform the crossmatch
-    # THIS TAKES A WHILE
     
-    count = 0
-    coords = [fujiCoords, guadalupeCoords]
-    tables = [fuji, guadalupe]
-    names = ['fuji', 'guadalupe']
-    goodRows = []
-    for coordSet, table, filename in zip(coords, tables, names):
-        
-        print(f'----- {filename} -----')
-        
-        matches = []
-        for ii, lensCoord in enumerate(lensCoords):
-
-            match = checkSep(coordSet, lensCoord, table)
-            if match is not None:
-                match['OBJNAME'] = [masterlensNames[ii]]*len(match)
-                matches.append(match)
-
-                count += len(match)
-                print(f'found {count}')
-                
-            if ii%1000 == 0:
-                print(f'Index: {ii}')
-        
-        if len(matches) > 0:
-            stack = vstack(matches)
-            
-            out = stack[['TARGETID', 'SURVEY', 'PROGRAM', 'HEALPIX', 'Z']]
-            out.write(f'{filename}-masterlens-matches-info.fits', overwrite=True)
-
-            ascii.write(stack, filename+'-matches.ecsv', format='ecsv', overwrite=True)
-            
-        print()
-               
+    
+    
 if __name__ == '__main__':
     sys.exit(main())

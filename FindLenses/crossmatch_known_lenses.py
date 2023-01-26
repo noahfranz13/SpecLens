@@ -24,7 +24,7 @@ def sepHist(masterLensCoords, fujiCoords):
 
     # plot them up to look for a good maximum search radius
     fig, ax = plt.subplots()
-    _ = ax.hist(sep2d.arcsec, bins=100)
+    _ = ax.hist(sep2d.arcsec, bins=100, color='cornflowerblue', range=(0,5))
     ax.set_ylabel('N')
     ax.set_xlabel('Target Separation (arcsec)')
 

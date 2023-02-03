@@ -32,7 +32,7 @@ class SpecLens():
 
         # initiate some instance variables for later
         self.zbestfile = None
-        self.coaddfile = None
+        self.coadds = []
         
     def _preprocess(self, specprod='fuji'):
         """Can't use the Docker container for pre-processing because we do not have
@@ -46,7 +46,6 @@ class SpecLens():
         
         # extract info from z catalog
         zbests = []
-        coadds = []
         fibermaps = []
         expfibermaps = []
         tsnr2s = []
@@ -81,14 +80,15 @@ class SpecLens():
             spec = read_spectra(coaddfile).select(targets=targetid)
             assert(np.all(spec.fibermap['TARGETID'] == targetid))
 
+            # update the headers so things work with fastspecfit
             spechdr['SPGRP'] = 'healpix'
             spechdr['SPGRPVAL'] = 0
-            spechdr['SURVEY'] = survey
-            spechdr['PROGRAM'] = program
+            spechdr['SURVEY'] = 'speclens' #survey 
+            spechdr['PROGRAM'] = 'speclens' #program
             spechdr['SPECPROD'] = specprod
             spec.meta = spechdr
             
-            coadds.append(spec)
+            self.coadds.append(spec)
             
             zbests.append(zbest)
             fibermaps.append(fibermap)
@@ -100,41 +100,40 @@ class SpecLens():
         redhdr['SPGRPVAL'] = 0
         redhdr['SURVEY'] = 'speclens' #survey
         redhdr['PROGRAM'] = 'speclens' #program
-        redhdr['SPECPROD'] = 'fuji' #specprod
-        
+        redhdr['SPECPROD'] = specprod
+
         # write out zbests
-        self.zbestfile = 'preprocess-zbest.fits'
+        self.zbestfile = os.path.join(self.outdir, 'redrock-preprocess.fits')
         archetype_version = None
         template_version = {redhdr['TEMNAM{:02d}'.format(nn)]: redhdr['TEMVER{:02d}'.format(nn)] for nn in np.arange(10)}
         print(f'Writing {self.zbestfile}')
         zbest = vstack(zbests, join_type='exact')
-        print(f'zbest\n{zbest}')
-
+        
         # for now just take the first of each of these
         fibermap = fibermaps[0]#vstack(fibermaps, join_type='exact')
-        print(f'fibermap\n{fibermap}')
-        
         expfibermap = expfibermaps[0] #vstack(expfibermaps, join_type='exact')
-        print(f'expfibermap\n{expfibermap}')
-        
         tsnr2 = tsnr2s[0] #vstack(tsnr2s, join_type='exact')
-        print(f'tsnr2\n{tsnr2}')
+
         write_zbest(self.zbestfile, zbest, fibermap, expfibermap, tsnr2,
                     template_version, archetype_version, spec_header=redhdr)
-
-        # write out coadds
-        outcoaddfile = 'preprocess-coadd.fits'
-        print(f'Writing {self.coaddfile}')
-        print(coadds[0].meta)
-        write_spectra(self.coaddfile, spectraStack(coadds))
-
-    def runFastSpec(self):
-
-        fastfitfile = os.path.join(self.outdir, 'fastspec-speclens.fits')
         
-        qadir = os.path.join(self.outdir, 'qa')
-        if not os.path.isdir(qadir):
-            os.makedirs(qadir, exist_ok=True)
+    def modelLens(self, makeqa=False, mp=1):
+        '''
+        Model the lens (hopefully) using fastspecfit
+
+        Note that if the source is not strong enough 
+        this may pick up the entire spectrum, not
+        just the lens
+        '''
+
+        # imports
+        from fastspecfit.mpi import plan
+        from fastspecfit.continuum import ContinuumTools
+        from fastspecfit.emlines import EMLineFit
+        from fastspecfit.io import DESISpectra, write_fastspecfit, read_fastspecfit
+        from fastspecfit.fastspecfit import _fastspec_one, fastspec_one, _desiqa_one, desiqa_one
+        
+        fastfitfile = os.path.join(self.outdir, 'fastspec-speclens.fits')
         
         targetids = self.infile['TARGETID'] 
         
@@ -144,11 +143,16 @@ class SpecLens():
         sample = sample[np.isin(sample['TARGETID'], targetids)]
 
         Spec = DESISpectra()
-        CFit = ContinuumFit()
+        CFit = ContinuumTools()
         EMFit = EMLineFit()
 
-        if args.makeqa:
+        if makeqa:
             print('Making QA Plots...')
+
+            qadir = os.path.join(self.outdir, 'qa')
+            if not os.path.isdir(qadir):
+                os.makedirs(qadir, exist_ok=True)
+            
             fastfit, metadata, coadd_type, _ = read_fastspecfit(fastfitfile)
             targetids = metadata['TARGETID'].data
 
@@ -159,15 +163,15 @@ class SpecLens():
             qaargs = [(CFit, EMFit, data[igal], fastfit[indx[igal]], metadata[indx[igal]],
                        coadd_type, False, qadir, None) for igal in np.arange(len(indx))]                
 
-            if args.mp > 1:
+            if mp > 1:
                 import multiprocessing
-                with multiprocessing.Pool(args.mp) as P:
+                with multiprocessing.Pool(mp) as P:
                     P.map(_desiqa_one, qaargs)
             else:
                 [desiqa_one(*_qaargs) for _qaargs in qaargs]
         else:
             Spec.select(redrockfiles=self.zbestfile, targetids=targetids, zmin=-0.1,
-                        use_quasarnet=False, ntargets=len(zcat))
+                        use_quasarnet=False, ntargets=len(self.infile))
             data = Spec.read_and_unpack(CFit, fastphot=False, synthphot=True, remember_coadd=True)
 
             out, meta = Spec.init_output(CFit=CFit, EMFit=EMFit, fastphot=False)
@@ -176,9 +180,9 @@ class SpecLens():
             t0 = time.time()
             fitargs = [(iobj, data[iobj], out[iobj], meta[iobj], CFit, EMFit, False, False) # verbose and broadlinefit
                        for iobj in np.arange(Spec.ntargets)]
-            if args.mp > 1:
+            if mp > 1:
                 import multiprocessing
-                with multiprocessing.Pool(args.mp) as P:
+                with multiprocessing.Pool(mp) as P:
                     _out = P.map(_fastspec_one, fitargs)
             else:
                 _out = [fastspec_one(*_fitargs) for _fitargs in fitargs]
@@ -200,3 +204,14 @@ class SpecLens():
             write_fastspecfit(out, meta, outfile=fastfitfile, modelspectra=modelspec, specprod=Spec.specprod,
                           coadd_type=Spec.coadd_type, fastphot=False)
 
+
+        def modelSource(self):
+            '''
+            Model the source galaxy (the one being lensed) by
+            subtracting the lens model from the original spectra
+
+            Note that if the features of the source spectra are not 
+            strong enough then there will be a featureless 
+            spectrum leftoover.
+            '''
+            pass

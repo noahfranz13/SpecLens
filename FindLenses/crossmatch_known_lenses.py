@@ -14,13 +14,13 @@ from astropy.io import ascii
 import fitsio
 
 # useful functions
-def sepHist(masterLensCoords, fujiCoords):
+def sepHist(masterLensCoords, desiCoords):
     '''
     masterLensCoords [SkyCoord Obj] : All of the master lens coordinates
-    fujiCoords [SkyCoord Obj] : All of the coordinats in the Fuji Best catalog
+    desiCoords [SkyCoord Obj] : All of the coordinats in the DESI SpecProd Best catalog
     '''
     # calculate all of the nearest neighbors
-    _, sep2d, _ = masterLensCoords.match_to_catalog_sky(fujiCoords)
+    _, sep2d, _ = masterLensCoords.match_to_catalog_sky(desiCoords)
 
     # plot them up to look for a good maximum search radius
     fig, ax = plt.subplots()
@@ -32,6 +32,12 @@ def sepHist(masterLensCoords, fujiCoords):
 
 def main():
     start = time.time()
+
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument('--specprod', help='DESI spectroscopic production to pull from', type=str, default='iron')
+    p.add_argument('--searchRadius', help='Search radius in arcseconds, default is 1', type=int, default=1)
+    args = p.parse_args()
     
     # get master lens coordinates as sky coords to compare with desi observations
     masterlens = pd.read_csv('masterlens.tsv', sep='\t', skiprows=1)
@@ -45,27 +51,27 @@ def main():
 
     lensCoords = SkyCoord(raDeg*u.deg, decDeg*u.deg)
     
-    # read in fuji catalog
-    fujiPath = '/global/cfs/cdirs/desi/spectro/redux/fuji/zcatalog/zall-pix-fuji.fits'
-    fuji = Table(fitsio.FITS(fujiPath)[1].read())
-    fuji = fuji[fuji['ZCAT_PRIMARY']] # only select the best among duplicates
+    # read in specprod catalog
+    desiPath = f'/global/cfs/cdirs/desi/spectro/redux/{args.specprod}/zcatalog/zall-pix-{args.specprod}.fits'
+    desi = Table(fitsio.FITS(desiPath)[1].read())
+    desi = desi[desi['ZCAT_PRIMARY']] # only select the best among duplicates
     
-    # convert the fuji ra and dec to SkyCoords
-    fujiCoords = SkyCoord(fuji['TARGET_RA']*u.deg, fuji['TARGET_DEC']*u.deg)
+    # convert the specprod ra and dec to SkyCoords
+    desiCoords = SkyCoord(desi['TARGET_RA']*u.deg, desi['TARGET_DEC']*u.deg)
 
     # plot up histogram of separations
-    sepHist(lensCoords, fujiCoords)
+    sepHist(lensCoords, desiCoords)
     
     # perform the crossmatch
-    searchSep = 1*u.arcsec # based on the histogram, 1 arcsecond seems reasonable
-    fujiIdx, masterlensIdx, sep, _ = lensCoords.search_around_sky(fujiCoords, searchSep)
+    searchSep = a.searchRadius*u.arcsec # based on the histogram, 1 arcsecond seems reasonable
+    desiIdx, masterlensIdx, sep, _ = lensCoords.search_around_sky(desiCoords, searchSep)
 
     # write out file I need for fastspecfit
-    fastspecInput = fuji[['TARGETID', 'SURVEY', 'PROGRAM', 'HEALPIX']][fujiIdx]
+    fastspecInput = desi[['TARGETID', 'SURVEY', 'PROGRAM', 'HEALPIX']][desiIdx]
     fastspecInput.write('fastspec-input.fits', overwrite=True)
 
-    # write out fuji matches
-    fuji[fujiIdx].write('fuji-matches.fits', overwrite=True)
+    # write out desi target matches
+    desi[desiIdx].write('{args.specprod}-matches.fits', overwrite=True)
 
     # fix and write out masterlens matches
     masterlens.columns = masterlens.columns.str.strip('#').str.strip() # get rid of spaces
@@ -73,7 +79,7 @@ def main():
     masterlens.columns = masterlens.columns.str.upper() # make upper case column names
     Table.from_pandas(masterlens.iloc[masterlensIdx]).write('masterlens-matches.fits', overwrite=True)
 
-    print(f'{len(fujiIdx)} matches found in {time.time()-start:.2f} seconds')
+    print(f'{len(desiIdx)} matches found in {time.time()-start:.2f} seconds from the {args.specprod} production')
     
 if __name__ == '__main__':
     sys.exit(main())

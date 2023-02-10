@@ -63,7 +63,7 @@ def main():
     sepHist(lensCoords, desiCoords)
     
     # perform the crossmatch
-    searchSep = a.searchRadius*u.arcsec # based on the histogram, 1 arcsecond seems reasonable
+    searchSep = args.searchRadius*u.arcsec # based on the histogram, 1 arcsecond seems reasonable
     desiIdx, masterlensIdx, sep, _ = lensCoords.search_around_sky(desiCoords, searchSep)
 
     # write out file I need for fastspecfit
@@ -71,7 +71,7 @@ def main():
     fastspecInput.write('fastspec-input.fits', overwrite=True)
 
     # write out desi target matches
-    desi[desiIdx].write('{args.specprod}-matches.fits', overwrite=True)
+    desi[desiIdx].write(f'{args.specprod}-matches.fits', overwrite=True)
 
     # fix and write out masterlens matches
     masterlens.columns = masterlens.columns.str.strip('#').str.strip() # get rid of spaces

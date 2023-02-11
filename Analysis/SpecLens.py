@@ -34,7 +34,7 @@ class SpecLens():
         self.zbestfile = None
         self.coadds = []
         
-    def _preprocess(self, specprod='fuji'):
+    def _preprocess(self, specprod='iron'):
         """Can't use the Docker container for pre-processing because we do not have
         redrock:
 
@@ -56,7 +56,7 @@ class SpecLens():
             program = row['PROGRAM']
             hpx = row['HEALPIX']
             
-            datadir = f'/global/cfs/cdirs/desi/spectro/redux/fuji/healpix/{survey}/{program}/{str(hpx)[:-2]}/{hpx}'
+            datadir = f'/global/cfs/cdirs/desi/spectro/redux/{specprod}/healpix/{survey}/{program}/{str(hpx)[:-2]}/{hpx}'
 
             # read the redrock and coadd catalog
             coaddfile = os.path.join(datadir, f'coadd-{survey}-{program}-{hpx}.fits')
@@ -127,91 +127,24 @@ class SpecLens():
         '''
 
         # imports
-        from fastspecfit.mpi import plan
-        from fastspecfit.continuum import ContinuumTools
-        from fastspecfit.emlines import EMLineFit
-        from fastspecfit.io import DESISpectra, write_fastspecfit, read_fastspecfit
-        from fastspecfit.fastspecfit import _fastspec_one, fastspec_one, _desiqa_one, desiqa_one
+        from fastspecfit.fastspecfit import fastspec
+        from subprocess import run
         
         fastfitfile = os.path.join(self.outdir, 'fastspec-speclens.fits')
         
-        targetids = self.infile['TARGETID'] 
-        
         self._preprocess() # preprocess the data
 
-        sample = Table(fitsio.read(self.zbestfile))
-        sample = sample[np.isin(sample['TARGETID'], targetids)]
-
-        Spec = DESISpectra()
-        CFit = ContinuumTools()
-        EMFit = EMLineFit()
-
-        if makeqa:
-            print('Making QA Plots...')
-
-            qadir = os.path.join(self.outdir, 'qa')
-            if not os.path.isdir(qadir):
-                os.makedirs(qadir, exist_ok=True)
-            
-            fastfit, metadata, coadd_type, _ = read_fastspecfit(fastfitfile)
-            targetids = metadata['TARGETID'].data
-
-            Spec.select(redrockfiles=self.zbestfile, targetids=targetids, use_quasarnet=False)
-            data = Spec.read_and_unpack(CFit, fastphot=False, synthphot=True, remember_coadd=True)
+        # add arguments to a list for subprocess
+        arg = ['fastspec', '--mp', f'{mp}', '--outfile', f'{fastfitfile}', f'{self.zbestfile}']
+        run(arg)
         
-            indx = np.arange(len(data))
-            qaargs = [(CFit, EMFit, data[igal], fastfit[indx[igal]], metadata[indx[igal]],
-                       coadd_type, False, qadir, None) for igal in np.arange(len(indx))]                
+    def modelSource(self):
+        '''
+        Model the source galaxy (the one being lensed) by
+        subtracting the lens model from the original spectra
 
-            if mp > 1:
-                import multiprocessing
-                with multiprocessing.Pool(mp) as P:
-                    P.map(_desiqa_one, qaargs)
-            else:
-                [desiqa_one(*_qaargs) for _qaargs in qaargs]
-        else:
-            Spec.select(redrockfiles=self.zbestfile, targetids=targetids, zmin=-0.1,
-                        use_quasarnet=False, ntargets=len(self.infile))
-            data = Spec.read_and_unpack(CFit, fastphot=False, synthphot=True, remember_coadd=True)
-
-            out, meta = Spec.init_output(CFit=CFit, EMFit=EMFit, fastphot=False)
-
-            # Fit in parallel
-            t0 = time.time()
-            fitargs = [(iobj, data[iobj], out[iobj], meta[iobj], CFit, EMFit, False, False) # verbose and broadlinefit
-                       for iobj in np.arange(Spec.ntargets)]
-            if mp > 1:
-                import multiprocessing
-                with multiprocessing.Pool(mp) as P:
-                    _out = P.map(_fastspec_one, fitargs)
-            else:
-                _out = [fastspec_one(*_fitargs) for _fitargs in fitargs]
-            _out = list(zip(*_out))
-            out = Table(np.hstack(_out[0]))
-            meta = Table(np.hstack(_out[1]))
-
-            try:
-                # need to vstack to preserve the wavelength metadata 
-                modelspec = vstack(_out[2], metadata_conflicts='error')
-            except:
-                errmsg = 'Metadata conflict when stacking model spectra.'
-                log.critical(errmsg)
-                raise ValueError(errmsg)
-
-            log.info('Fitting everything took: {:.2f} sec'.format(time.time()-t0))
-
-            # Write out.
-            write_fastspecfit(out, meta, outfile=fastfitfile, modelspectra=modelspec, specprod=Spec.specprod,
-                          coadd_type=Spec.coadd_type, fastphot=False)
-
-
-        def modelSource(self):
-            '''
-            Model the source galaxy (the one being lensed) by
-            subtracting the lens model from the original spectra
-
-            Note that if the features of the source spectra are not 
-            strong enough then there will be a featureless 
-            spectrum leftoover.
-            '''
-            pass
+        Note that if the features of the source spectra are not 
+        strong enough then there will be a featureless 
+        spectrum leftoover.
+        '''
+        pass

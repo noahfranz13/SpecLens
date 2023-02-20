@@ -34,10 +34,16 @@ class SpecLens():
         
         self.infile = Table(fitsio.read(self.filepath))[:self.ntest] # FIX ME: only grabbing first 10 lines for testing
 
-        # initiate some instance variables for later
+        # initiate some paths for later
         self.zbestfile = os.path.join(self.outdir, 'redrock-lenses.fits')
         self.coaddfile = os.path.join(self.outdir, 'coadd-lenses.fits')
         self.fastspecfile = os.path.join(self.outdir, 'fastspec-lenses.fits')
+        self.sourcespecfile = os.path.join(self.outdir, 'coadd-source.fits')
+        self.sourcezbestfile = os.path.join(self.outdir, 'redrock-source.fits')
+        
+        # save stacked coadd spectra
+        self.spectra = None
+        self.sourceSpec = None
         
     def _preprocess(self):
         """Can't use the Docker container for pre-processing because we do not have
@@ -125,7 +131,8 @@ class SpecLens():
                     template_version, archetype_version, spec_header=redhdr)
 
         print('Writing {}'.format(self.coaddfile))
-        write_spectra(self.coaddfile, stack(coadds))
+        self.spectra = stack(coadds)
+        write_spectra(self.coaddfile, self.spectra)
         
     def modelLens(self, makeqa=False, mp=1):
         '''
@@ -151,13 +158,102 @@ class SpecLens():
                            f'{self.zbestfile}']
         run(arg)
         
-    def modelSource(self):
+    def modelSource(self, overwrite=False):
         '''
         Model the source galaxy (the one being lensed) by
         subtracting the lens model from the original spectra
 
         Note that if the features of the source spectra are not 
         strong enough then there will be a featureless 
-        spectrum leftoover.
+        spectrum leftover.
         '''
-        pass
+        self.subtract()
+
+        from redrock.external.desi import rrdesi
+
+        rroutdir = os.path.join(self.outdir, 'redrock-outputs')
+        if not os.path.exists(rroutdir):
+            os.mkdir(rroutdir)
+    
+        for ii, specfile in enumerate(self.sourceSpec):
+
+            rrfile = os.path.join(rroutdir, f'redrock-source-{ii}.fits')
+            
+            if not overwrite and os.path.exists(rrfile):
+                print('Overwrite set to False and redrock file exists so skipping...')
+                continue
+        
+            rrdesi(options=['--mp', str(mp), '-o', rrfile, '-i', specfile])
+
+        # Gather up all the results and write out a summary table.    
+        zbest = Table(np.hstack([fitsio.read(rrfile) for rrfile in outfiles]))
+        #zbest = zbest[np.argsort(zbest['TARGETID'])]
+        
+        print('Writing {} redshifts to {}'.format(len(zbest), self.sourcezbestfile))
+        zbest.write(self.sourcezbestfile, overwrite=True)
+
+    def subtract(self):
+        '''
+        Subtracts the lens model from the combined spectra
+        '''
+        from copy import deepcopy
+        from desispec.io import write_spectra
+        
+        lensWave, lensFlux, lensMeta = self.getFastspecModel()
+        self.prepSpectra(lensMeta)
+
+        combFlux = self.spectra.flux['brz']
+        assert np.all(np.isclose(combWave, self.spectra.wave['brz']))
+
+        # subtract the fluxes
+        sourceFlux = combFlux - lensFlux
+        self.sourceSpec = deepcopy(self.spectra)
+
+        self.sourceSpec.flux = sourceFlux
+
+        # write out spectra object
+        write_spectra(self.sourcespecfile, self.sourceSpec)
+
+    def getFastspecModel(self):
+        '''
+        Reads in fastspec model and preps it for subtraction
+        '''
+        
+        # read in the metadata
+        modelmeta = Table(fitsio.read(self.fastspecfile, 'METADATA'))
+        
+        # read in fastspecfit model
+        models, hdr = fitsio.read(self.fastspecfile, 'MODELS', header=True)
+        modelwave = hdr['CRVAL1'] + np.arange(hdr['NAXIS1']) * hdr['CDELT1']
+        
+        modelflux = np.sum(models, axis=1).flatten()
+    
+        return modelwave, modelflux, modelmeta
+
+    def prepSpectra(self, fastmeta):
+        '''
+        Preprocesses the Spectra and collapse b, r, z bands
+        into one for modelling
+
+        fastmeta : fastspecfit model meta data
+        '''
+        from desispec.io import coadd_cameras
+        from desiutil.dust import dust_transmission
+
+        coaddSpec = coadd_cameras(self.spectra)
+
+        # milky way dust transmission
+        mwSpec = dust_transmission(coaddSpec.wave[bands], fastmeta['EBV'])
+
+        # make the correction and save update spectra in instance variable
+        coaddSpec.flux = {'brz' : coaddSpec.flux[bands] / mwSpec}
+        self.spectra = coaddSpec
+
+    def separateLens(self):
+        '''
+        Uses the rest of the methods in this class to separate the spectra
+        (Basically just does everything that we could need)
+        '''
+
+        self.modelLens()
+        self.modelSource()

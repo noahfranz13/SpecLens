@@ -133,3 +133,6 @@ dmypy.json
 
 # emacs
 *~
+
+# don't add anything from fastspecfit local release
+Analysis/fastspecfit/*

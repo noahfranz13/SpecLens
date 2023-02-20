@@ -14,7 +14,7 @@ from desispec.spectra import stack as spectraStack
 
 class SpecLens():
 
-    def __init__(self, filepath, outdir=os.getcwd()):
+    def __init__(self, filepath, outdir=os.getcwd(), specprod='iron'):
         '''
         filepath [string] : path to fits file with the DESI Spectroscopic Lens
                             observations. Must have the at least the following 
@@ -27,14 +27,15 @@ class SpecLens():
         
         self.filepath = filepath
         self.outdir = outdir
-
+        self.specprod = specprod
+        
         self.infile = Table(fitsio.read(self.filepath))[:10] # FIX ME: only grabbing first 10 lines for testing
 
         # initiate some instance variables for later
         self.zbestfile = None
         self.coadds = []
         
-    def _preprocess(self, specprod='iron'):
+    def _preprocess(self):
         """Can't use the Docker container for pre-processing because we do not have
         redrock:
 
@@ -56,7 +57,7 @@ class SpecLens():
             program = row['PROGRAM']
             hpx = row['HEALPIX']
             
-            datadir = f'/global/cfs/cdirs/desi/spectro/redux/{specprod}/healpix/{survey}/{program}/{str(hpx)[:-2]}/{hpx}'
+            datadir = f'/global/cfs/cdirs/desi/spectro/redux/{self.specprod}/healpix/{survey}/{program}/{str(hpx)[:-2]}/{hpx}'
 
             # read the redrock and coadd catalog
             coaddfile = os.path.join(datadir, f'coadd-{survey}-{program}-{hpx}.fits')
@@ -85,7 +86,7 @@ class SpecLens():
             spechdr['SPGRPVAL'] = 0
             spechdr['SURVEY'] = 'speclens' #survey 
             spechdr['PROGRAM'] = 'speclens' #program
-            spechdr['SPECPROD'] = specprod
+            spechdr['SPECPROD'] = self.specprod
             spec.meta = spechdr
             
             self.coadds.append(spec)
@@ -100,7 +101,7 @@ class SpecLens():
         redhdr['SPGRPVAL'] = 0
         redhdr['SURVEY'] = 'speclens' #survey
         redhdr['PROGRAM'] = 'speclens' #program
-        redhdr['SPECPROD'] = specprod
+        redhdr['SPECPROD'] = self.specprod
 
         # write out zbests
         self.zbestfile = os.path.join(self.outdir, 'redrock-preprocess.fits')
@@ -127,7 +128,6 @@ class SpecLens():
         '''
 
         # imports
-        from fastspecfit.fastspecfit import fastspec
         from subprocess import run
         
         fastfitfile = os.path.join(self.outdir, 'fastspec-speclens.fits')
@@ -135,7 +135,11 @@ class SpecLens():
         self._preprocess() # preprocess the data
 
         # add arguments to a list for subprocess
-        arg = ['fastspec', '--mp', f'{mp}', '--outfile', f'{fastfitfile}', f'{self.zbestfile}']
+        arg = ['fastspec', '--mp', f'{mp}',
+                           '--outfile', f'{fastfitfile}',
+                           '--specproddir', f'{self.specprod}',
+                           '--find-coadds',
+                           f'{self.zbestfile}']
         run(arg)
         
     def modelSource(self):

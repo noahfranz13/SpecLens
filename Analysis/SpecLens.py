@@ -5,9 +5,10 @@ lenses in DESI spectroscopy
 Author: Noah Franz
 '''
 
-import os
+import os, pdb
 import numpy as np
 from astropy.table import Table, vstack
+from astropy.io import fits
 import fitsio
 
 from desispec.spectra import stack as spectraStack
@@ -28,12 +29,15 @@ class SpecLens():
         self.filepath = filepath
         self.outdir = outdir
         self.specprod = specprod
+
+        self.ntest = 3
         
-        self.infile = Table(fitsio.read(self.filepath))[:10] # FIX ME: only grabbing first 10 lines for testing
+        self.infile = Table(fitsio.read(self.filepath))[:self.ntest] # FIX ME: only grabbing first 10 lines for testing
 
         # initiate some instance variables for later
-        self.zbestfile = None
-        self.coadds = []
+        self.zbestfile = os.path.join(self.outdir, 'redrock-lenses.fits')
+        self.coaddfile = os.path.join(self.outdir, 'coadd-lenses.fits')
+        self.fastspecfile = os.path.join(self.outdir, 'fastspec-lenses.fits')
         
     def _preprocess(self):
         """Can't use the Docker container for pre-processing because we do not have
@@ -44,12 +48,14 @@ class SpecLens():
         """
         from redrock.external.desi import write_zbest
         from desispec.io import write_spectra, read_spectra
+        from desispec.spectra import stack
         
         # extract info from z catalog
         zbests = []
         fibermaps = []
         expfibermaps = []
         tsnr2s = []
+        coadds = []
         for row in self.infile:
 
             targetid = row['TARGETID']
@@ -77,19 +83,20 @@ class SpecLens():
             tsnr2 = tsnr2[I]
             assert(np.all(zbest['TARGETID'] == targetid))
             
-            spechdr = fitsio.read_header(coaddfile)
+            spechdr = fits.getheader(coaddfile)
+            #spechdr = fitsio.read_header(coaddfile)
             spec = read_spectra(coaddfile).select(targets=targetid)
             assert(np.all(spec.fibermap['TARGETID'] == targetid))
 
             # update the headers so things work with fastspecfit
-            spechdr['SPGRP'] = 'healpix'
+            spechdr['SPGRP'] = 'custom'
             spechdr['SPGRPVAL'] = 0
             spechdr['SURVEY'] = 'speclens' #survey 
             spechdr['PROGRAM'] = 'speclens' #program
             spechdr['SPECPROD'] = self.specprod
             spec.meta = spechdr
-            
-            self.coadds.append(spec)
+
+            coadds.append(spec)
             
             zbests.append(zbest)
             fibermaps.append(fibermap)
@@ -104,19 +111,21 @@ class SpecLens():
         redhdr['SPECPROD'] = self.specprod
 
         # write out zbests
-        self.zbestfile = os.path.join(self.outdir, 'redrock-preprocess.fits')
         archetype_version = None
-        template_version = {redhdr['TEMNAM{:02d}'.format(nn)]: redhdr['TEMVER{:02d}'.format(nn)] for nn in np.arange(10)}
-        print(f'Writing {self.zbestfile}')
+        template_version = {redhdr['TEMNAM{:02d}'.format(nn)]: redhdr['TEMVER{:02d}'.format(nn)] for nn in np.arange(self.ntest)}
         zbest = vstack(zbests, join_type='exact')
         
         # for now just take the first of each of these
-        fibermap = fibermaps[0]#vstack(fibermaps, join_type='exact')
-        expfibermap = expfibermaps[0] #vstack(expfibermaps, join_type='exact')
-        tsnr2 = tsnr2s[0] #vstack(tsnr2s, join_type='exact')
+        fibermap = vstack(fibermaps)#, join_type='exact')
+        expfibermap = vstack(expfibermaps)#, join_type='exact')
+        tsnr2 = vstack(tsnr2s)#, join_type='exact')
 
+        print('Writing {}'.format(self.zbestfile))
         write_zbest(self.zbestfile, zbest, fibermap, expfibermap, tsnr2,
                     template_version, archetype_version, spec_header=redhdr)
+
+        print('Writing {}'.format(self.coaddfile))
+        write_spectra(self.coaddfile, stack(coadds))
         
     def modelLens(self, makeqa=False, mp=1):
         '''
@@ -130,15 +139,15 @@ class SpecLens():
         # imports
         from subprocess import run
         
-        fastfitfile = os.path.join(self.outdir, 'fastspec-speclens.fits')
-        
-        self._preprocess() # preprocess the data
+        fastfitfile = self.fastspecfile
+
+        if not os.path.isfile(self.zbestfile) and not os.path.isfile(self.coaddfile):
+            self._preprocess() # preprocess the data
 
         # add arguments to a list for subprocess
         arg = ['fastspec', '--mp', f'{mp}',
                            '--outfile', f'{fastfitfile}',
                            '--specproddir', f'{self.specprod}',
-                           '--find-coadds',
                            f'{self.zbestfile}']
         run(arg)
         

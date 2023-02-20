@@ -4,5 +4,5 @@ Quick test script for SpecLens
 
 from SpecLens import SpecLens
 
-s = SpecLens('/global/homes/n/nrfran/SpecLens/FindLenses/fastspec-input.fits')
-s.modelLens()
+s = SpecLens('/pscratch/sd/n/nrfran/speclens/fastspec-input.fits')
+s.modelLens(mp=3)

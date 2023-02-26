@@ -2,7 +2,7 @@
 # compares the coordinates
 
 # imports
-import sys, time
+import os, sys, time
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -37,49 +37,55 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--specprod', help='DESI spectroscopic production to pull from', type=str, default='iron')
     p.add_argument('--searchRadius', help='Search radius in arcseconds, default is 1', type=int, default=1)
+    p.add_argument('--outdir', default=os.getcwd(), type=str, help='output file directory')
+    p.add_argument('--overwrite', action='store_true', help='Overwrite any existing output files.')
     args = p.parse_args()
+
+    outpath = os.path.join(args.outdir, 'fastspec-input.fits')
+    if not os.path.isfile(outpath) or args.overwrite:
+        # get master lens coordinates as sky coords to compare with desi observations
+        masterlens = pd.read_csv('masterlens.tsv', sep='\t', skiprows=1)
+        masterlensNames = masterlens.iloc[:,0].to_numpy() # get list of source names from master lens database
+        
+        raDeg = np.array(masterlens[' "ra_coord"']).astype(float)
+        decDeg = np.array(masterlens[' "dec_coord"']).astype(float)
+
+        raDeg = raDeg[~np.isnan(raDeg)]
+        decDeg = decDeg[~np.isnan(decDeg)]
+
+        lensCoords = SkyCoord(raDeg*u.deg, decDeg*u.deg)
     
-    # get master lens coordinates as sky coords to compare with desi observations
-    masterlens = pd.read_csv('masterlens.tsv', sep='\t', skiprows=1)
-    masterlensNames = masterlens.iloc[:,0].to_numpy() # get list of source names from master lens database
-
-    raDeg = np.array(masterlens[' "ra_coord"']).astype(float)
-    decDeg = np.array(masterlens[' "dec_coord"']).astype(float)
-
-    raDeg = raDeg[~np.isnan(raDeg)]
-    decDeg = decDeg[~np.isnan(decDeg)]
-
-    lensCoords = SkyCoord(raDeg*u.deg, decDeg*u.deg)
+        # read in specprod catalog
+        desiPath = f'/global/cfs/cdirs/desi/spectro/redux/{args.specprod}/zcatalog/zall-pix-{args.specprod}.fits'
+        desi = Table(fitsio.FITS(desiPath)[1].read())
+        desi = desi[desi['ZCAT_PRIMARY']] # only select the best among duplicates
     
-    # read in specprod catalog
-    desiPath = f'/global/cfs/cdirs/desi/spectro/redux/{args.specprod}/zcatalog/zall-pix-{args.specprod}.fits'
-    desi = Table(fitsio.FITS(desiPath)[1].read())
-    desi = desi[desi['ZCAT_PRIMARY']] # only select the best among duplicates
+        # convert the specprod ra and dec to SkyCoords
+        desiCoords = SkyCoord(desi['TARGET_RA']*u.deg, desi['TARGET_DEC']*u.deg)
+
+        # plot up histogram of separations
+        sepHist(lensCoords, desiCoords)
     
-    # convert the specprod ra and dec to SkyCoords
-    desiCoords = SkyCoord(desi['TARGET_RA']*u.deg, desi['TARGET_DEC']*u.deg)
-
-    # plot up histogram of separations
-    sepHist(lensCoords, desiCoords)
+        # perform the crossmatch
+        searchSep = args.searchRadius*u.arcsec # based on the histogram, 1 arcsecond seems reasonable
+        desiIdx, masterlensIdx, sep, _ = lensCoords.search_around_sky(desiCoords, searchSep)
     
-    # perform the crossmatch
-    searchSep = args.searchRadius*u.arcsec # based on the histogram, 1 arcsecond seems reasonable
-    desiIdx, masterlensIdx, sep, _ = lensCoords.search_around_sky(desiCoords, searchSep)
+        # write out file I need for fastspecfit
+        fastspecInput = desi[['TARGETID', 'SURVEY', 'PROGRAM', 'HEALPIX']][desiIdx]
+        fastspecInput.write(outpath, overwrite=True)
 
-    # write out file I need for fastspecfit
-    fastspecInput = desi[['TARGETID', 'SURVEY', 'PROGRAM', 'HEALPIX']][desiIdx]
-    fastspecInput.write('fastspec-input.fits', overwrite=True)
+        # write out desi target matches
+        desi[desiIdx].write(os.path.join(args.outdir, f'{args.specprod}-matches.fits'), overwrite=True)
 
-    # write out desi target matches
-    desi[desiIdx].write(f'{args.specprod}-matches.fits', overwrite=True)
+        # fix and write out masterlens matches
+        masterlens.columns = masterlens.columns.str.strip('#').str.strip() # get rid of spaces
+        masterlens.columns = [colname[1:-1] for colname in masterlens.columns] # get rid of extra quotes
+        masterlens.columns = masterlens.columns.str.upper() # make upper case column names
+        Table.from_pandas(masterlens.iloc[masterlensIdx]).write(os.path.join(args.outdir, 'masterlens-matches.fits'), overwrite=True)
 
-    # fix and write out masterlens matches
-    masterlens.columns = masterlens.columns.str.strip('#').str.strip() # get rid of spaces
-    masterlens.columns = [colname[1:-1] for colname in masterlens.columns] # get rid of extra quotes
-    masterlens.columns = masterlens.columns.str.upper() # make upper case column names
-    Table.from_pandas(masterlens.iloc[masterlensIdx]).write('masterlens-matches.fits', overwrite=True)
-
-    print(f'{len(desiIdx)} matches found in {time.time()-start:.2f} seconds from the {args.specprod} production')
-    
+        print(f'{len(desiIdx)} matches found in {time.time()-start:.2f} seconds from the {args.specprod} production')
+    else:
+        print('Output file found so not running crossmatch!')
+        
 if __name__ == '__main__':
     sys.exit(main())

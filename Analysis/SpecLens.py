@@ -6,16 +6,18 @@ Author: Noah Franz
 '''
 
 import os, pdb
+from subprocess import run
+
 import numpy as np
 from astropy.table import Table, vstack
 from astropy.io import fits
 import fitsio
 
-from desispec.spectra import stack as spectraStack
+from desispec.io import write_spectra, read_spectra        
 
 class SpecLens():
 
-    def __init__(self, filepath, outdir=os.getcwd(), specprod='iron'):
+    def __init__(self, filepath, outdir=None, specprod='iron', overwrite=True, mp=1):
         '''
         filepath [string] : path to fits file with the DESI Spectroscopic Lens
                             observations. Must have the at least the following 
@@ -24,14 +26,23 @@ class SpecLens():
                             2) SURVEY
                             3) PROGRAM
                             4) HEALPIX
+        outdir [string]   : output directory for files written by this class, 
+                            default is None and sets to the directory of the
+                            input filepath.
+        specprod [string] : spectroscopic production to run on
+        overwrite [bool]  : if True, overwrites existing files, default is True
+        mp [int]          : number of cores to use with multiprocessing, default is 1
         '''
         
         self.filepath = filepath
-        self.outdir = outdir
+        if outdir is None:
+            self.outdir = os.path.split(self.filepath)[0]
+        else:
+            self.outdir = outdir
         self.specprod = specprod
 
         self.ntest = 3
-        
+
         self.infile = Table(fitsio.read(self.filepath))[:self.ntest] # FIX ME: only grabbing first 10 lines for testing
 
         # initiate some paths for later
@@ -40,10 +51,19 @@ class SpecLens():
         self.fastspecfile = os.path.join(self.outdir, 'fastspec-lenses.fits')
         self.sourcespecfile = os.path.join(self.outdir, 'coadd-source.fits')
         self.sourcezbestfile = os.path.join(self.outdir, 'redrock-source.fits')
+        self.QAdir = os.path.join(self.outdir, 'QA')
         
+        if overwrite or (not os.path.isfile(self.zbestfile) and not os.path.isfile(self.coaddfile)):
+            self.spectra = None
+            self._preprocess() # preprocess the data
+        else:
+            self.spectra = read_spectra(self.coaddfile)
+            
         # save stacked coadd spectra
-        self.spectra = None
         self.sourceSpec = None
+
+        # set up multiprocessing
+        self.mp = mp
         
     def _preprocess(self):
         """Can't use the Docker container for pre-processing because we do not have
@@ -53,9 +73,9 @@ class SpecLens():
 
         """
         from redrock.external.desi import write_zbest
-        from desispec.io import write_spectra, read_spectra
         from desispec.spectra import stack
-        
+
+        print('\n\nStarting preprocessing...')
         # extract info from z catalog
         zbests = []
         fibermaps = []
@@ -132,9 +152,10 @@ class SpecLens():
 
         print('Writing {}'.format(self.coaddfile))
         self.spectra = stack(coadds)
+        print(self.spectra)
         write_spectra(self.coaddfile, self.spectra)
         
-    def modelLens(self, makeqa=False, mp=1):
+    def modelLens(self):
         '''
         Model the lens (hopefully) using fastspecfit
 
@@ -142,17 +163,13 @@ class SpecLens():
         this may pick up the entire spectrum, not
         just the lens
         '''
-
-        # imports
-        from subprocess import run
+        
+        print('\n\nModelling the lens with fastspecfit...')
         
         fastfitfile = self.fastspecfile
 
-        if not os.path.isfile(self.zbestfile) and not os.path.isfile(self.coaddfile):
-            self._preprocess() # preprocess the data
-
         # add arguments to a list for subprocess
-        arg = ['fastspec', '--mp', f'{mp}',
+        arg = ['fastspec', '--mp', f'{self.mp}',
                            '--outfile', f'{fastfitfile}',
                            '--specproddir', f'{self.specprod}',
                            f'{self.zbestfile}']
@@ -167,31 +184,16 @@ class SpecLens():
         strong enough then there will be a featureless 
         spectrum leftover.
         '''
+        print('\n\nModeling the source...') 
         self.subtract()
 
         from redrock.external.desi import rrdesi
-
-        rroutdir = os.path.join(self.outdir, 'redrock-outputs')
-        if not os.path.exists(rroutdir):
-            os.mkdir(rroutdir)
-    
-        for ii, specfile in enumerate(self.sourceSpec):
-
-            rrfile = os.path.join(rroutdir, f'redrock-source-{ii}.fits')
             
-            if not overwrite and os.path.exists(rrfile):
-                print('Overwrite set to False and redrock file exists so skipping...')
-                continue
+        if not overwrite and os.path.exists(self.sourcezbestfile):
+            print('Overwrite set to False and redrock file exists so skipping...')
+        else:
+            rrdesi(options=['--mp', str(self.mp), '-o', self.sourcezbestfile, '-i', self.sourcespecfile])
         
-            rrdesi(options=['--mp', str(mp), '-o', rrfile, '-i', specfile])
-
-        # Gather up all the results and write out a summary table.    
-        zbest = Table(np.hstack([fitsio.read(rrfile) for rrfile in outfiles]))
-        #zbest = zbest[np.argsort(zbest['TARGETID'])]
-        
-        print('Writing {} redshifts to {}'.format(len(zbest), self.sourcezbestfile))
-        zbest.write(self.sourcezbestfile, overwrite=True)
-
     def subtract(self):
         '''
         Subtracts the lens model from the combined spectra
@@ -203,14 +205,17 @@ class SpecLens():
         self.prepSpectra(lensMeta)
 
         combFlux = self.spectra.flux['brz']
-        assert np.all(np.isclose(combWave, self.spectra.wave['brz']))
+        assert np.all(np.isclose(lensWave, self.spectra.wave['brz']))
 
         # subtract the fluxes
+        print(len(combFlux), len(lensFlux))
+        print(combFlux, lensFlux)
         sourceFlux = combFlux - lensFlux
         self.sourceSpec = deepcopy(self.spectra)
 
-        self.sourceSpec.flux = sourceFlux
-
+        self.sourceSpec.flux['brz'] = sourceFlux
+        #pdb.set_trace()
+        
         # write out spectra object
         write_spectra(self.sourcespecfile, self.sourceSpec)
 
@@ -225,9 +230,9 @@ class SpecLens():
         # read in fastspecfit model
         models, hdr = fitsio.read(self.fastspecfile, 'MODELS', header=True)
         modelwave = hdr['CRVAL1'] + np.arange(hdr['NAXIS1']) * hdr['CDELT1']
-        
-        modelflux = np.sum(models, axis=1).flatten()
     
+        modelflux = [np.sum(m, axis=0).flatten() for m in models] # THIS LINE IS BUGGED WITH MULTIPLE OBJECTS!
+        
         return modelwave, modelflux, modelmeta
 
     def prepSpectra(self, fastmeta):
@@ -237,13 +242,13 @@ class SpecLens():
 
         fastmeta : fastspecfit model meta data
         '''
-        from desispec.io import coadd_cameras
+        from desispec.coaddition import coadd_cameras
         from desiutil.dust import dust_transmission
-
+        
         coaddSpec = coadd_cameras(self.spectra)
-
+        bands = coaddSpec.bands[0]
         # milky way dust transmission
-        mwSpec = dust_transmission(coaddSpec.wave[bands], fastmeta['EBV'])
+        mwSpec = np.array([dust_transmission(coaddSpec.wave[bands], row['EBV']) for row in fastmeta])
 
         # make the correction and save update spectra in instance variable
         coaddSpec.flux = {'brz' : coaddSpec.flux[bands] / mwSpec}
@@ -257,3 +262,23 @@ class SpecLens():
 
         self.modelLens()
         self.modelSource()
+
+    def generateQA(self):
+        '''
+        Wrapper function to generate quality analysis (QA) plots for the 
+        fastspecfit run during the lens modelling step of the code. If 
+        fastspecfit has not been run it runs it first and then generates 
+        the plots.
+        '''
+        if not os.path.isfile(self.fastspecfile):
+            # run fastspecfit if the file hasn't been generated
+            self.modelLens()
+
+        if not os.path.exists(self.QAdir):
+            os.mkdir(self.QAdir)
+        
+        cmd = ['fastspecfit-qa', self.fastspecfile,
+               '-o', self.QAdir,
+               '--redrockfiles', self.zbestfile,
+               '--mp', str(self.mp)]
+        run(cmd)

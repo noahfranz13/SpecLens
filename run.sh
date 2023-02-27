@@ -13,7 +13,7 @@ python3 crossmatch_known_lenses.py --specprod iron --outdir $dir
 
 # separate found lenses
 cd ../Analysis
-python3 runSpecLens.py -i $file --makeqa --overwrite --mp 16 
+python3 runSpecLens.py -i $file --makeqa --overwrite --mp $1 
 
 # generate html page of QA plots
 python3 displayQA.py --dir $qa

@@ -41,9 +41,7 @@ class SpecLens():
             self.outdir = outdir
         self.specprod = specprod
 
-        self.ntest = 3
-
-        self.infile = Table(fitsio.read(self.filepath))[:self.ntest] # FIX ME: only grabbing first 10 lines for testing
+        self.infile = Table(fitsio.read(self.filepath)) # FIX ME: only grabbing first 10 lines for testing
 
         # initiate some paths for later
         self.zbestfile = os.path.join(self.outdir, 'redrock-lenses.fits')
@@ -138,7 +136,7 @@ class SpecLens():
 
         # write out zbests
         archetype_version = None
-        template_version = {redhdr['TEMNAM{:02d}'.format(nn)]: redhdr['TEMVER{:02d}'.format(nn)] for nn in np.arange(self.ntest)}
+        template_version = {redhdr['TEMNAM{:02d}'.format(nn)]: redhdr['TEMVER{:02d}'.format(nn)] for nn in np.arange(len(zbests))}
         zbest = vstack(zbests, join_type='exact')
         
         # for now just take the first of each of these

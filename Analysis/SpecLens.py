@@ -50,9 +50,11 @@ class SpecLens():
         self.sourcespecfile = os.path.join(self.outdir, 'coadd-source.fits')
         self.sourcezbestfile = os.path.join(self.outdir, 'redrock-source.fits')
         self.QAdir = os.path.join(self.outdir, 'QA')
-        
+
+        # set up multiprocessing
+        self.mp = int(mp)
         if overwrite or (not os.path.isfile(self.zbestfile) and not os.path.isfile(self.coaddfile)):
-            self.spectra = None
+            self.spectra = []
             self._preprocess() # preprocess the data
         else:
             self.spectra = read_spectra(self.coaddfile)
@@ -60,9 +62,6 @@ class SpecLens():
         # save stacked coadd spectra
         self.sourceSpec = None
 
-        # set up multiprocessing
-        self.mp = mp
-        
     def _preprocess(self):
         """Can't use the Docker container for pre-processing because we do not have
         redrock:
@@ -75,84 +74,85 @@ class SpecLens():
 
         print('\n\nStarting preprocessing...')
         # extract info from z catalog
-        zbests = []
-        fibermaps = []
-        expfibermaps = []
-        tsnr2s = []
-        coadds = []
-        for row in self.infile:
+        if self.mp > 1:
+            from multiprocessing import Pool
+            with Pool(self.mp) as p:
+                output = p.map(self.readSingleSpec, [row for row in self.infile])
+        else:
+            output = [self.readSingleSpec(row) for row in self.infile]
 
-            targetid = row['TARGETID']
-            survey = row['SURVEY'] 
-            program = row['PROGRAM']
-            hpx = row['HEALPIX']
-            
-            datadir = f'/global/cfs/cdirs/desi/spectro/redux/{self.specprod}/healpix/{survey}/{program}/{str(hpx)[:-2]}/{hpx}'
-
-            # read the redrock and coadd catalog
-            coaddfile = os.path.join(datadir, f'coadd-{survey}-{program}-{hpx}.fits')
-            redrockfile = os.path.join(datadir, f'redrock-{survey}-{program}-{hpx}.fits')
-
-            redhdr = fitsio.read_header(redrockfile)
-            zbest = Table.read(redrockfile, 'REDSHIFTS')
-            fibermap = Table.read(redrockfile, 'FIBERMAP')
-            expfibermap = Table.read(redrockfile, 'EXP_FIBERMAP')
-            tsnr2 = Table.read(redrockfile, 'TSNR2')
-
-            I = np.where(zbest['TARGETID'] == targetid)
-
-            zbest = zbest[I]
-            fibermap = fibermap[I]
-            expfibermap = expfibermap[I]
-            tsnr2 = tsnr2[I]
-            assert(np.all(zbest['TARGETID'] == targetid))
-            
-            spechdr = fits.getheader(coaddfile)
-            #spechdr = fitsio.read_header(coaddfile)
-            spec = read_spectra(coaddfile).select(targets=targetid)
-            assert(np.all(spec.fibermap['TARGETID'] == targetid))
-
-            # update the headers so things work with fastspecfit
-            spechdr['SPGRP'] = 'custom'
-            spechdr['SPGRPVAL'] = 0
-            spechdr['SURVEY'] = 'speclens' #survey 
-            spechdr['PROGRAM'] = 'speclens' #program
-            spechdr['SPECPROD'] = self.specprod
-            spec.meta = spechdr
-
-            coadds.append(spec)
-            
-            zbests.append(zbest)
-            fibermaps.append(fibermap)
-            expfibermaps.append(expfibermap)
-            tsnr2s.append(tsnr2)
-
+        spectra, zbests, fibermaps, expfibermaps, tsnr2s, redhdr = list(zip(*output))
+        redhdr = redhdr[0]
+        
         # update the headers so things work with fastspecfit
         redhdr['SPGRP'] = 'healpix'
         redhdr['SPGRPVAL'] = 0
         redhdr['SURVEY'] = 'speclens' #survey
         redhdr['PROGRAM'] = 'speclens' #program
         redhdr['SPECPROD'] = self.specprod
-
+        
         # write out zbests
         archetype_version = None
         template_version = {redhdr['TEMNAM{:02d}'.format(nn)]: redhdr['TEMVER{:02d}'.format(nn)] for nn in np.arange(len(zbests))}
-        zbest = vstack(zbests, join_type='exact')
+
+        zbests = vstack(zbests, join_type='exact')
         
         # for now just take the first of each of these
-        fibermap = vstack(fibermaps)#, join_type='exact')
-        expfibermap = vstack(expfibermaps)#, join_type='exact')
-        tsnr2 = vstack(tsnr2s)#, join_type='exact')
+        fibermaps = vstack(fibermaps)
+        expfibermaps = vstack(expfibermaps)
+        tsnr2s = vstack(tsnr2s)
 
         print('Writing {}'.format(self.zbestfile))
-        write_zbest(self.zbestfile, zbest, fibermap, expfibermap, tsnr2,
+        write_zbest(self.zbestfile, zbests, fibermaps, expfibermaps, tsnr2s,
                     template_version, archetype_version, spec_header=redhdr)
 
         print('Writing {}'.format(self.coaddfile))
-        self.spectra = stack(coadds)
-        print(self.spectra)
+        self.spectra = stack(spectra)
         write_spectra(self.coaddfile, self.spectra)
+
+    def readSingleSpec(self, row):
+        '''
+        Read in a single spectra and it's corresponding redrock file
+        '''
+        targetid = row['TARGETID']
+        survey = row['SURVEY'] 
+        program = row['PROGRAM']
+        hpx = row['HEALPIX']
         
+        datadir = f'/global/cfs/cdirs/desi/spectro/redux/{self.specprod}/healpix/{survey}/{program}/{str(hpx//100)}/{hpx}'
+
+        # read the redrock and coadd catalog
+        coaddfile = os.path.join(datadir, f'coadd-{survey}-{program}-{hpx}.fits')
+        redrockfile = os.path.join(datadir, f'redrock-{survey}-{program}-{hpx}.fits')
+        
+        redhdr = fitsio.read_header(redrockfile)
+        zbest = Table.read(redrockfile, 'REDSHIFTS')
+        fibermap = Table.read(redrockfile, 'FIBERMAP')
+        expfibermap = Table.read(redrockfile, 'EXP_FIBERMAP')
+        tsnr2 = Table.read(redrockfile, 'TSNR2')
+        
+        I = np.where(zbest['TARGETID'] == targetid)[0]
+
+        zbest = zbest[I]
+        fibermap = fibermap[I]
+        expfibermap = expfibermap[I]
+        tsnr2 = tsnr2[I]
+        assert(np.all(zbest['TARGETID'] == targetid))
+        
+        spechdr = fits.getheader(coaddfile)
+        spec = read_spectra(coaddfile).select(targets=targetid)
+        assert(np.all(spec.fibermap['TARGETID'] == targetid))
+        
+        # update the headers so things work with fastspecfit
+        spechdr['SPGRP'] = 'custom'
+        spechdr['SPGRPVAL'] = 0
+        spechdr['SURVEY'] = 'speclens' #survey 
+        spechdr['PROGRAM'] = 'speclens' #program
+        spechdr['SPECPROD'] = self.specprod
+        spec.meta = spechdr
+
+        return spec, zbest, fibermap, expfibermap, tsnr2, redhdr
+    
     def modelLens(self):
         '''
         Model the lens (hopefully) using fastspecfit

@@ -83,7 +83,7 @@ class SpecLens():
 
         spectra, zbests, fibermaps, expfibermaps, tsnr2s, redhdr = list(zip(*output))
         redhdr = redhdr[0]
-        
+        print(len(spectra))
         # update the headers so things work with fastspecfit
         redhdr['SPGRP'] = 'healpix'
         redhdr['SPGRPVAL'] = 0
@@ -93,8 +93,8 @@ class SpecLens():
         
         # write out zbests
         archetype_version = None
-        template_version = {redhdr['TEMNAM{:02d}'.format(nn)]: redhdr['TEMVER{:02d}'.format(nn)] for nn in np.arange(len(zbests))}
-
+        template_version = {redhdr['TEMNAM{:02d}'.format(nn)]: redhdr['TEMVER{:02d}'.format(nn)] for nn in np.arange(10)}
+        
         zbests = vstack(zbests, join_type='exact')
         
         # for now just take the first of each of these
@@ -163,17 +163,16 @@ class SpecLens():
         '''
         
         print('\n\nModelling the lens with fastspecfit...')
-        
-        fastfitfile = self.fastspecfile
-
+        #pdb.set_trace()
         # add arguments to a list for subprocess
-        arg = ['fastspec', '--mp', f'{self.mp}',
-                           '--outfile', f'{fastfitfile}',
+        cmd = ['fastspec', '--mp', f'{self.mp}',
+                           '--outfile', f'{self.fastspecfile}',
                            '--specproddir', f'{self.specprod}',
                            f'{self.zbestfile}']
-        run(arg)
         
-    def modelSource(self, overwrite=False):
+        run(cmd)
+        
+    def modelSource(self, overwrite=True):
         '''
         Model the source galaxy (the one being lensed) by
         subtracting the lens model from the original spectra

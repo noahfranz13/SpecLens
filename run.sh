@@ -1,6 +1,7 @@
 #!/bin/bash
 
 source /global/cfs/cdirs/desi/software/desi_environment.sh 23.1
+module swap desispec/0.57.0
 module load fastspecfit/2.1.1
 
 dir=/global/cfs/cdirs/desi/users/nrfran/speclens

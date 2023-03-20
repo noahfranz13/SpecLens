@@ -7,6 +7,8 @@
 #SBATCH --account=desi
 #SBATCH --mail-user=nr25fran@siena.edu
 #SBATCH --mail-type=ALL
-#SBATCH -o /global/homes/n/nrfran/SpecLens/speclens.log
+#SBATCH -o /global/cfs/cdirs/desi/users/nrfran/speclens/speclens.log
+#SBATCH -c 128
 
-srun -c 128 ./run.sh 128
+#srun -c 128 ./run.sh 10
+./run.sh 128

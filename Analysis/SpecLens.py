@@ -5,11 +5,11 @@ lenses in DESI spectroscopy
 Author: Noah Franz
 '''
 
-import os, pdb
+import os, sys, pdb
 from subprocess import run
 
 import numpy as np
-from astropy.table import Table, vstack
+from astropy.table import Table, vstack, unique
 from astropy.io import fits
 import fitsio
 
@@ -42,7 +42,7 @@ class SpecLens():
         self.specprod = specprod
 
         self.infile = Table(fitsio.read(self.filepath)) # FIX ME: only grabbing first 10 lines for testing
-
+        
         # initiate some paths for later
         self.zbestfile = os.path.join(self.outdir, 'redrock-lenses.fits')
         self.coaddfile = os.path.join(self.outdir, 'coadd-lenses.fits')
@@ -63,12 +63,7 @@ class SpecLens():
         self.sourceSpec = None
 
     def _preprocess(self):
-        """Can't use the Docker container for pre-processing because we do not have
-        redrock:
 
-        fastspecfit is aliased to `source $IMPY_DIR/bin/fastspecfit-env-nersc'
-
-        """
         from redrock.external.desi import write_zbest
         from desispec.spectra import stack
 
@@ -83,7 +78,7 @@ class SpecLens():
 
         spectra, zbests, fibermaps, expfibermaps, tsnr2s, redhdr = list(zip(*output))
         redhdr = redhdr[0]
-        print(len(spectra))
+
         # update the headers so things work with fastspecfit
         redhdr['SPGRP'] = 'healpix'
         redhdr['SPGRPVAL'] = 0
@@ -94,22 +89,28 @@ class SpecLens():
         # write out zbests
         archetype_version = None
         template_version = {redhdr['TEMNAM{:02d}'.format(nn)]: redhdr['TEMVER{:02d}'.format(nn)] for nn in np.arange(10)}
-        
-        zbests = vstack(zbests, join_type='exact')
-        
-        # for now just take the first of each of these
-        fibermaps = vstack(fibermaps)
-        expfibermaps = vstack(expfibermaps)
-        tsnr2s = vstack(tsnr2s)
 
+
+        zbests = vstack(zbests, join_type='exact')
+
+        _, I = np.unique(zbests['TARGETID'], return_index=True)
+
+        #pdb.set_trace()
+        zbests = zbests[I]
+        fibermaps = vstack(fibermaps)[I]
+        expfibermaps = vstack(expfibermaps)[I]
+        tsnr2s = vstack(tsnr2s)[I]
+        
         print('Writing {}'.format(self.zbestfile))
         write_zbest(self.zbestfile, zbests, fibermaps, expfibermaps, tsnr2s,
                     template_version, archetype_version, spec_header=redhdr)
 
         print('Writing {}'.format(self.coaddfile))
-        self.spectra = stack(spectra)
+        self.spectra = stack(np.array(spectra)[I])
         write_spectra(self.coaddfile, self.spectra)
 
+        print(f'\n\nzbests len = {len(zbests)}\nspectra len = {len(spectra)}\n\n')
+        
     def readSingleSpec(self, row):
         '''
         Read in a single spectra and it's corresponding redrock file
@@ -169,8 +170,11 @@ class SpecLens():
                            '--outfile', f'{self.fastspecfile}',
                            '--specproddir', f'{self.specprod}',
                            f'{self.zbestfile}']
-        
-        run(cmd)
+        try:
+            run(cmd)
+        except Exception as e:
+            print('Exiting on \n{e}')
+            sys.exit()
         
     def modelSource(self, overwrite=True):
         '''
@@ -199,6 +203,7 @@ class SpecLens():
         from desispec.io import write_spectra
         
         lensWave, lensFlux, lensMeta = self.getFastspecModel()
+        print(f'fastspec length = {len(lensMeta)}')
         self.prepSpectra(lensMeta)
 
         combFlux = self.spectra.flux['brz']
@@ -241,9 +246,13 @@ class SpecLens():
         '''
         from desispec.coaddition import coadd_cameras
         from desiutil.dust import dust_transmission
-        
+
         coaddSpec = coadd_cameras(self.spectra)
         bands = coaddSpec.bands[0]
+
+        print(f'len of comb spectra = {len(coaddSpec.flux[bands])}')
+        print(f'len of fastmeta = {len(fastmeta)}')
+        
         # milky way dust transmission
         mwSpec = np.array([dust_transmission(coaddSpec.wave[bands], row['EBV']) for row in fastmeta])
 

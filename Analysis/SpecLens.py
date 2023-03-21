@@ -93,23 +93,21 @@ class SpecLens():
 
         zbests = vstack(zbests, join_type='exact')
 
-        _, I = np.unique(zbests['TARGETID'], return_index=True)
-
         #pdb.set_trace()
-        zbests = zbests[I]
-        fibermaps = vstack(fibermaps)[I]
-        expfibermaps = vstack(expfibermaps)[I]
-        tsnr2s = vstack(tsnr2s)[I]
+        zbests = zbests#[I]
+        fibermaps = vstack(fibermaps)#[I]
+        expfibermaps = vstack(expfibermaps)#[I]
+        tsnr2s = vstack(tsnr2s)#[I]
         
         print('Writing {}'.format(self.zbestfile))
         write_zbest(self.zbestfile, zbests, fibermaps, expfibermaps, tsnr2s,
                     template_version, archetype_version, spec_header=redhdr)
 
         print('Writing {}'.format(self.coaddfile))
-        self.spectra = stack(np.array(spectra)[I])
+        self.spectra = stack(spectra)
         write_spectra(self.coaddfile, self.spectra)
 
-        print(f'\n\nzbests len = {len(zbests)}\nspectra len = {len(spectra)}\n\n')
+        #print(f'\n\nzbests len = {len(zbests)}\nspectra len = {len(spectra)}\n\n')
         
     def readSingleSpec(self, row):
         '''
@@ -203,15 +201,12 @@ class SpecLens():
         from desispec.io import write_spectra
         
         lensWave, lensFlux, lensMeta = self.getFastspecModel()
-        print(f'fastspec length = {len(lensMeta)}')
         self.prepSpectra(lensMeta)
 
         combFlux = self.spectra.flux['brz']
         assert np.all(np.isclose(lensWave, self.spectra.wave['brz']))
 
         # subtract the fluxes
-        print(len(combFlux), len(lensFlux))
-        print(combFlux, lensFlux)
         sourceFlux = combFlux - lensFlux
         self.sourceSpec = deepcopy(self.spectra)
 
@@ -233,7 +228,7 @@ class SpecLens():
         models, hdr = fitsio.read(self.fastspecfile, 'MODELS', header=True)
         modelwave = hdr['CRVAL1'] + np.arange(hdr['NAXIS1']) * hdr['CDELT1']
     
-        modelflux = [np.sum(m, axis=0).flatten() for m in models] # THIS LINE IS BUGGED WITH MULTIPLE OBJECTS!
+        modelflux = [np.sum(m, axis=0).flatten() for m in models]
         
         return modelwave, modelflux, modelmeta
 
@@ -249,9 +244,6 @@ class SpecLens():
 
         coaddSpec = coadd_cameras(self.spectra)
         bands = coaddSpec.bands[0]
-
-        print(f'len of comb spectra = {len(coaddSpec.flux[bands])}')
-        print(f'len of fastmeta = {len(fastmeta)}')
         
         # milky way dust transmission
         mwSpec = np.array([dust_transmission(coaddSpec.wave[bands], row['EBV']) for row in fastmeta])

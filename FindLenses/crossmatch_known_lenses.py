@@ -30,6 +30,18 @@ def sepHist(masterLensCoords, desiCoords):
 
     fig.savefig('separation-hist.png', bbox_inches='tight', transparent=False)
 
+def mask(a):
+    '''
+    Mask the input to drop duplicates and get it ready for fastspecfit
+    '''
+    
+    I = np.where((a['TARGETID'] >= 0) * (a['Z'] > 1e-3) * (a['OBJTYPE'] == 'TGT') * (a['ZWARN'] & 2**9 == 0))[0] # get rid of negative targs
+    a = a[I]
+
+    print(a[['TARGETID', 'Z', 'OBJTYPE', 'ZWARN']])
+
+    return a, I
+        
 def main():
     start = time.time()
 
@@ -59,7 +71,7 @@ def main():
         desiPath = f'/global/cfs/cdirs/desi/spectro/redux/{args.specprod}/zcatalog/zall-pix-{args.specprod}.fits'
         desi = Table(fitsio.FITS(desiPath)[1].read())
         desi = desi[desi['ZCAT_PRIMARY']] # only select the best among duplicates
-    
+        
         # convert the specprod ra and dec to SkyCoords
         desiCoords = SkyCoord(desi['TARGET_RA']*u.deg, desi['TARGET_DEC']*u.deg)
 
@@ -70,20 +82,30 @@ def main():
         searchSep = args.searchRadius*u.arcsec # based on the histogram, 1 arcsecond seems reasonable
         desiIdx, masterlensIdx, sep, _ = lensCoords.search_around_sky(desiCoords, searchSep)
     
+        # drop duplicates
+        desiout = desi[desiIdx]
+        masterlensout = masterlens.iloc[masterlensIdx]
+        _, I = np.unique(desiout['TARGETID'], return_index=True)
+        desiout = desiout[I]
+        masterlensout = masterlensout.iloc[I]
+
+        desiout, I2 = mask(desiout)
+        masterlensout = masterlensout.iloc[I2] 
+        
         # write out file I need for fastspecfit
-        fastspecInput = desi[['TARGETID', 'SURVEY', 'PROGRAM', 'HEALPIX']][desiIdx]
+        fastspecInput = desiout[['TARGETID', 'SURVEY', 'PROGRAM', 'HEALPIX']]
         fastspecInput.write(outpath, overwrite=True)
 
         # write out desi target matches
-        desi[desiIdx].write(os.path.join(args.outdir, f'{args.specprod}-matches.fits'), overwrite=True)
+        desiout.write(os.path.join(args.outdir, f'{args.specprod}-matches.fits'), overwrite=True)
 
         # fix and write out masterlens matches
-        masterlens.columns = masterlens.columns.str.strip('#').str.strip() # get rid of spaces
-        masterlens.columns = [colname[1:-1] for colname in masterlens.columns] # get rid of extra quotes
-        masterlens.columns = masterlens.columns.str.upper() # make upper case column names
-        Table.from_pandas(masterlens.iloc[masterlensIdx]).write(os.path.join(args.outdir, 'masterlens-matches.fits'), overwrite=True)
+        masterlensout.columns = masterlensout.columns.str.strip('#').str.strip() # get rid of spaces
+        masterlensout.columns = [colname[1:-1] for colname in masterlensout.columns] # get rid of extra quotes
+        masterlensout.columns = masterlensout.columns.str.upper() # make upper case column names
+        Table.from_pandas(masterlensout).write(os.path.join(args.outdir, 'masterlens-matches.fits'), overwrite=True)
 
-        print(f'{len(desiIdx)} matches found in {time.time()-start:.2f} seconds from the {args.specprod} production')
+        print(f'{len(desiout)} matches found in {time.time()-start:.2f} seconds from the {args.specprod} production')
     else:
         print('Output file found so not running crossmatch!')
         

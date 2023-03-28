@@ -19,17 +19,19 @@ def main():
     p.add_argument('--makeqa', action='store_true', help='Build QA in parallel.')
     args = p.parse_args()
     
-    # initialize SpecLens object
-    s = SpecLens(args.infile,
-                 outdir=args.outdir,
-                 specprod=args.specprod,
-                 overwrite=args.overwrite,
-                 mp=args.mp)
-
-    s.separateLens() # separate all the lenses
-
     if args.makeqa:
-        s.generateQA()
+        SpecLens.generateQA(args.infile,
+                            args.outdir,
+                            mp=args.mp)
+    else:
+        # initialize SpecLens object
+        s = SpecLens(args.infile,
+                     outdir=args.outdir,
+                     specprod=args.specprod,
+                     overwrite=args.overwrite,
+                     mp=args.mp)
+        
+        s.separateLens() # separate all the lenses
 
 if __name__ == "__main__":
     sys.exit(main())

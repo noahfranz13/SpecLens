@@ -4,6 +4,8 @@ quality analysis (QA) pages from fastspecfit
 '''
 import os, sys, glob
 import argparse
+import fitsio
+from astropy.table import Table
 
 def main():
 
@@ -11,8 +13,12 @@ def main():
     p.add_argument('--dir', help='Directory to create html page in', required=True)
     args = p.parse_args()
 
-    pngs = glob.glob(os.path.join(args.dir, '*.png'))
+    # read in astropy tables to populate table with more info
+    ironMatchesPath = os.path.join(os.path.split(args.dir)[0], 'iron-matches.fits')
+    ironMatches = Table(fitsio.read(ironMatchesPath))
 
+    pngs = glob.glob(os.path.join(args.dir, '*.png'))
+    
     idxfile = os.path.join(args.dir, 'index.html')
 
     initStr = ''' 
@@ -24,6 +30,7 @@ def main():
     </style>
     <table>
     <tr>
+    <th>Target Info</th>
     <th>QA Plot</th>
     </tr>
     '''
@@ -31,9 +38,30 @@ def main():
     with open(idxfile, 'w') as f:
         f.write(initStr)
         for png in pngs:
+
+            #print(ironMatches)
+            #print(ironMatches['TARGETID'])
+            tid = png.split('.')[0].split('-')[-1]
+            flag = ironMatches['TARGETID'] == int(tid)
+
+            iflag = ironMatches[flag]
+
+            ra = iflag['TARGET_RA'][0]
+            dec = iflag['TARGET_DEC'][0]
+            
+            col0 = f'''
+            <td>
+            Target ID: {tid}\n
+            <br>RA: {ra}\n
+            <br>Dec: {dec}\n
+            <br><a href="http://legacysurvey.org/viewer-dev/?ra={ra}&dec={dec}&zoom=14&layer=ls-dr9&sga&sga-parent" target="_blank">Legacy Link</a>
+            </td>\n
+            '''      
+            
             f.write('<tr>\n')
+            f.write(col0)
             f.write(f'<td><img src={os.path.split(png)[1]} height="60%" width="75%"></td>\n')
-            f.write(f'</tr>')
+            f.write(f'</tr>\n')
         f.write('</table>')
         f.write('</html></body>')
             

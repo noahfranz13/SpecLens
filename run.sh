@@ -14,7 +14,8 @@ python3 crossmatch_known_lenses.py --specprod iron --outdir $dir
 
 # separate found lenses
 cd ../Analysis
-python3 runSpecLens.py -i $file --makeqa --overwrite --mp $1 
+python3 runSpecLens.py -i $file --mp $1
+python3 runSpecLens.py -i $file --makeqa --mp $1 --outdir $dir
 
 # generate html page of QA plots
 python3 displayQA.py --dir $qa

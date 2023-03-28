@@ -41,6 +41,8 @@ class SpecLens():
             self.outdir = outdir
         self.specprod = specprod
 
+        self.overwrite = overwrite
+        
         self.infile = Table(fitsio.read(self.filepath)) # FIX ME: only grabbing first 10 lines for testing
         
         # initiate some paths for later
@@ -257,26 +259,47 @@ class SpecLens():
         Uses the rest of the methods in this class to separate the spectra
         (Basically just does everything that we could need)
         '''
+        done = False
+        if not os.path.isfile(self.fastspecfile) or self.overwrite:
+            self.modelLens()
+            done = True
+        else:
+            print('Skipping lens modelling, output files already exist')
 
-        self.modelLens()
-        self.modelSource()
+        if not os.path.isfile(self.sourcezbestfile) or self.overwrite:
+            self.modelSource()
+            done = True
+        else:
+            print('Skipping source modelling, output files already exist')
 
-    def generateQA(self):
+        if not done:
+            print('Nothing to be done! All outfiles exist.')
+
+        
+    @staticmethod
+    def generateQA(infile, outdir, mp=1, QAdir=None):
         '''
         Wrapper function to generate quality analysis (QA) plots for the 
         fastspecfit run during the lens modelling step of the code. If 
         fastspecfit has not been run it runs it first and then generates 
         the plots.
         '''
-        if not os.path.isfile(self.fastspecfile):
-            # run fastspecfit if the file hasn't been generated
-            self.modelLens()
-
-        if not os.path.exists(self.QAdir):
-            os.mkdir(self.QAdir)
+        print(outdir)
+        zbestfile = os.path.join(outdir, 'redrock-lenses.fits')
+        fastspecfile = os.path.join(outdir, 'fastspec-lenses.fits')
+        if QAdir is None:
+            QAdir = os.path.join(outdir, 'QA')
         
-        cmd = ['fastspecfit-qa', self.fastspecfile,
-               '-o', self.QAdir,
-               '--redrockfiles', self.zbestfile,
-               '--mp', str(self.mp)]
+        if not os.path.isfile(fastspecfile):
+            # run fastspecfit if the file hasn't been generated
+            #self.modelLens()
+            raise ValueError('You must model the lens before generating QA plots') 
+
+        if not os.path.exists(QAdir):
+            os.mkdir(QAdir)
+        
+        cmd = ['fastspecfit-qa', fastspecfile,
+               '-o', QAdir,
+               '--redrockfiles', zbestfile,
+               '--mp', str(mp)]
         run(cmd)

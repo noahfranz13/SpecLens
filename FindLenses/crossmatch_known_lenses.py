@@ -1,8 +1,7 @@
 # Python script to compare master lensing database to DESI observations
 # compares the coordinates
-
 # imports
-import os, sys, time
+import os, sys, time, pdb
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -56,8 +55,10 @@ def main():
     outpath = os.path.join(args.outdir, 'fastspec-input.fits')
     if not os.path.isfile(outpath) or args.overwrite:
         # get master lens coordinates as sky coords to compare with desi observations
-        masterlens = pd.read_csv('masterlens.tsv', sep='\t', skiprows=1)
-        masterlensNames = masterlens.iloc[:,0].to_numpy() # get list of source names from master lens database
+        masterlens = pd.read_csv('masterlens.tsv', sep='\t', skiprows=1, index_col=False)
+        #print(masterlens)
+        #masterlensNames = masterlens[:,0].as_array() # get list of source names from master lens database
+        masterlens = Table.from_pandas(masterlens)
         
         raDeg = np.array(masterlens[' "ra_coord"']).astype(float)
         decDeg = np.array(masterlens[' "dec_coord"']).astype(float)
@@ -81,16 +82,20 @@ def main():
         # perform the crossmatch
         searchSep = args.searchRadius*u.arcsec # based on the histogram, 1 arcsecond seems reasonable
         desiIdx, masterlensIdx, sep, _ = lensCoords.search_around_sky(desiCoords, searchSep)
-    
+            
         # drop duplicates
         desiout = desi[desiIdx]
-        masterlensout = masterlens.iloc[masterlensIdx]
+        masterlensout = masterlens[masterlensIdx]
         _, I = np.unique(desiout['TARGETID'], return_index=True)
         desiout = desiout[I]
-        masterlensout = masterlensout.iloc[I]
+        masterlensout = masterlensout[I]
 
         desiout, I2 = mask(desiout)
-        masterlensout = masterlensout.iloc[I2] 
+        masterlensout = masterlensout[I2]
+
+        # write out the separation array
+        sep = np.array(sep[I][I2])
+        np.savetxt(f'{args.specprod}-matches-separation.txt', sep)
         
         # write out file I need for fastspecfit
         fastspecInput = desiout[['TARGETID', 'SURVEY', 'PROGRAM', 'HEALPIX']]
@@ -100,10 +105,10 @@ def main():
         desiout.write(os.path.join(args.outdir, f'{args.specprod}-matches.fits'), overwrite=True)
 
         # fix and write out masterlens matches
-        masterlensout.columns = masterlensout.columns.str.strip('#').str.strip() # get rid of spaces
-        masterlensout.columns = [colname[1:-1] for colname in masterlensout.columns] # get rid of extra quotes
-        masterlensout.columns = masterlensout.columns.str.upper() # make upper case column names
-        Table.from_pandas(masterlensout).write(os.path.join(args.outdir, 'masterlens-matches.fits'), overwrite=True)
+        tout = Table(names=[n.strip('#').strip()[1:-1].upper() for n in masterlensout.columns], dtype=masterlensout.dtype)
+        for row in masterlensout:
+            tout.add_row(row)
+        tout.write(os.path.join(args.outdir, 'masterlens-matches.fits'), overwrite=True)
 
         print(f'{len(desiout)} matches found in {time.time()-start:.2f} seconds from the {args.specprod} production')
     else:

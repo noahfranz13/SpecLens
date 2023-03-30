@@ -17,6 +17,10 @@ def main():
     ironMatchesPath = os.path.join(os.path.split(args.dir)[0], 'iron-matches.fits')
     ironMatches = Table(fitsio.read(ironMatchesPath))
 
+    # read in source redrock fit to only add plots with a good fit to the html page
+    rrSourceFile = os.path.join(os.path.split(args.dir)[0], 'redrock-source.fits')
+    rrSource = Table(fitsio.read(rrSourceFile))
+    
     pngs = glob.glob(os.path.join(args.dir, '*.png'))
     
     idxfile = os.path.join(args.dir, 'index.html')
@@ -37,13 +41,17 @@ def main():
     
     with open(idxfile, 'w') as f:
         f.write(initStr)
+        ii = 0
         for png in pngs:
-
-            #print(ironMatches)
-            #print(ironMatches['TARGETID'])
             tid = png.split('.')[0].split('-')[-1]
-            flag = ironMatches['TARGETID'] == int(tid)
 
+            # skip files that have a bad fit
+            I = rrSource['TARGETID'] == int(tid)
+            rr = rrSource[I]
+            if rr['ZWARN'] != 0:
+                continue
+            ii += 1
+            flag = ironMatches['TARGETID'] == int(tid)
             iflag = ironMatches[flag]
 
             ra = iflag['TARGET_RA'][0]
@@ -64,6 +72,8 @@ def main():
             f.write(f'</tr>\n')
         f.write('</table>')
         f.write('</html></body>')
-            
+
+    print(f'QA Plots Displayed for {ii} Targets, the rest have ZWARN > 0!')
+        
 if __name__ == '__main__':
     sys.exit(main())

@@ -193,7 +193,7 @@ class SpecLens():
         if not overwrite and os.path.exists(self.sourcezbestfile):
             print('Overwrite set to False and redrock file exists so skipping...')
         else:
-            rrdesi(options=['--mp', str(self.mp), '-o', self.sourcezbestfile, '-i', self.sourcespecfile])
+            rrdesi(options=['--mp', str(self.mp-1), '-o', self.sourcezbestfile, '-i', self.sourcespecfile])
         
     def subtract(self):
         '''

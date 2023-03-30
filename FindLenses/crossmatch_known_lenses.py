@@ -52,19 +52,22 @@ def main():
     p.add_argument('--overwrite', action='store_true', help='Overwrite any existing output files.')
     args = p.parse_args()
 
+    iMax = 10
+
     outpath = os.path.join(args.outdir, 'fastspec-input.fits')
     if not os.path.isfile(outpath) or args.overwrite:
         # get master lens coordinates as sky coords to compare with desi observations
         masterlens = pd.read_csv('masterlens.tsv', sep='\t', skiprows=1, index_col=False)
         #print(masterlens)
         #masterlensNames = masterlens[:,0].as_array() # get list of source names from master lens database
-        masterlens = Table.from_pandas(masterlens)
+        I = np.array(~np.isnan(masterlens[' "ra_coord"'].astype(float)) * ~np.isnan(masterlens[' "dec_coord"'].astype(float)))
+        masterlens = Table.from_pandas(masterlens)[I]
         
         raDeg = np.array(masterlens[' "ra_coord"']).astype(float)
         decDeg = np.array(masterlens[' "dec_coord"']).astype(float)
 
-        raDeg = raDeg[~np.isnan(raDeg)]
-        decDeg = decDeg[~np.isnan(decDeg)]
+        #raDeg = raDeg[~np.isnan(raDeg)]
+        #decDeg = decDeg[~np.isnan(decDeg)]
 
         lensCoords = SkyCoord(raDeg*u.deg, decDeg*u.deg)
     
@@ -82,14 +85,20 @@ def main():
         # perform the crossmatch
         searchSep = args.searchRadius*u.arcsec # based on the histogram, 1 arcsecond seems reasonable
         desiIdx, masterlensIdx, sep, _ = lensCoords.search_around_sky(desiCoords, searchSep)
-            
-        # drop duplicates
+        
+        # get the tables to only have matching coordinates
         desiout = desi[desiIdx]
         masterlensout = masterlens[masterlensIdx]
+        print(desiIdx, masterlensIdx)
+        print(desiout[['TARGET_RA', 'TARGET_DEC']][:10])
+        print(masterlensout[[' "ra_coord"', ' "dec_coord"']][:10])
+
+        # drop duplicates
         _, I = np.unique(desiout['TARGETID'], return_index=True)
         desiout = desiout[I]
         masterlensout = masterlensout[I]
 
+        # mask the tables to work with fastspecfit
         desiout, I2 = mask(desiout)
         masterlensout = masterlensout[I2]
 

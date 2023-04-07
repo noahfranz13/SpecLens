@@ -137,3 +137,5 @@ dmypy.json
 
 # don't add anything from fastspecfit local release
 Analysis/fastspecfit/*
+
+*.png
